@@ -38,3 +38,27 @@ NUM_LANDMARKS = 21
 MIN_HAND_DETECTION_CONFIDENCE = 0.5   # дефолт MediaPipe: min_hand_detection_confidence
 MIN_HAND_PRESENCE_CONFIDENCE = 0.5    # дефолт MediaPipe: min_hand_presence_confidence
 MIN_TRACKING_CONFIDENCE = 0.5         # дефолт MediaPipe: min_tracking_confidence
+
+# --- Формат признаков (см. контракт данных в CLAUDE.md) -------------------
+
+# Размер вектора одного кадра: 2 руки x 21 точка x (x, y, z) + 2 флага видимости.
+HAND_VECTOR_SIZE = NUM_LANDMARKS * 3          # 63
+FEATURE_VECTOR_SIZE = 2 * HAND_VECTOR_SIZE + 2  # 128
+
+# Число кадров в одном окне жеста (см. контракт данных в CLAUDE.md).
+WINDOW_LENGTH = 60
+
+# Индекс запястья в 21 точке руки — точка, относительно которой убираем
+# смещение (позицию человека в кадре).
+WRIST_LANDMARK_INDEX = 0
+
+# Индекс точки, по которой оцениваем размер ладони (масштаб) — MCP-сустав
+# среднего пальца. Выбран потому, что почти не двигается при сгибании
+# пальцев (в отличие, например, от кончика пальца), а значит даёт более
+# стабильную оценку масштаба руки от кадра к кадру.
+PALM_SIZE_LANDMARK_INDEX = 9
+
+# Нижняя граница масштаба руки при нормализации: если оценка масштаба
+# случайно оказалась около нуля (вырожденный кадр), делим не на неё,
+# а на этот порог — чтобы не получить деление на ноль/NaN/inf.
+NORMALIZATION_EPSILON = 1e-6
