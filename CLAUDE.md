@@ -9,7 +9,8 @@
 
 - Python 3.9–3.12 (mediapipe официально не поддерживает 3.13+, ставок
   на будущее не делаем)
-- numpy < 2.0 (обязательное требование официальных wheel-пакетов mediapipe)
+- numpy: используй версию, совместимую с установленной версией
+  mediapipe (актуальные mediapipe с numpy 2.x работают)
 - MediaPipe Tasks API только: mediapipe.tasks.python.vision.HandLandmarker.
   Модуль mediapipe.solutions.hands НЕ существует в актуальных версиях —
   никогда не используй его, даже как fallback или в комментариях-примерах.
