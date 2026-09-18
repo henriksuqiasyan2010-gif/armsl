@@ -17,6 +17,20 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
+# Справочник меток жестов (label_id -> армянское написание/произношение/значение).
+LABELS_CSV_PATH = DATA_DIR / "labels.csv"
+
+# Метаданные всех записанных сэмплов — одна строка на сэмпл, дописывается
+# при каждой новой записи (см. src/dataset.py: record_sample).
+META_CSV_PATH = DATA_DIR / "meta.csv"
+
+# Порядок колонок в meta.csv — фиксирован, чтобы запись и чтение всегда
+# совпадали. Строка нужна и как заголовок файла, и как fieldnames для csv.DictWriter.
+META_CSV_COLUMNS = [
+    "file", "label", "person", "session",
+    "date", "lighting", "background", "distance_m", "notes",
+]
+
 # Файл модели детекции рук MediaPipe Tasks.
 # Лежит локально, в git не хранится (см. .gitignore), скачивается вручную
 # один раз. Во время работы программы ничего не скачиваем.
