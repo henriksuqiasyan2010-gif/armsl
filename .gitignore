@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Данные: папки в git пустыми, содержимое — нет
+data/raw/*
+!data/raw/.gitkeep
+
+models/*
+!models/.gitkeep
+
+reports/*
+!reports/.gitkeep
+
+# Артефакты по типам
+*.npy
+*.npz
+*.h5
+*.keras
+*.tflite
+*.pkl
+*.joblib
+*.mp4
+*.avi
+*.png
+*.jpg
+*.jpeg
