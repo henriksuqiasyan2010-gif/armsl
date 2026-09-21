@@ -210,12 +210,27 @@ def _append_meta_row(row: dict) -> None:
         writer.writerow(row)
 
 
-def load_dataset(data_dir: Path | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def load_dataset(
+    data_dir: Path | None = None, *, normalize: bool = True
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Загрузить весь накопленный датасет из data/meta.csv.
 
-    data_dir -- папка, где лежат meta.csv и подпапка raw/ (по умолчанию
+    data_dir  -- папка, где лежат meta.csv и подпапка raw/ (по умолчанию
                 config.DATA_DIR). Параметр — для тестов, чтобы не трогать
                 настоящие data/ проекта.
+    normalize -- True (по умолчанию) -- вернуть нормализованные окна, как
+                и раньше; вызывающему коду думать о normalize_window не
+                нужно. False -- вернуть СЫРЫЕ окна как они лежат на диске.
+
+                Единственный, кому нужен False, -- src/train.py: augment()
+                по контракту применяется к сырому окну (см. её докстринг),
+                а нормализация в этой функции сделала бы сырые данные
+                недостижимыми. Порядок при обучении должен быть
+                "разрез train/val -> аугментация train -> нормализация",
+                а не "нормализация при чтении -> аугментация нормализованного"
+                (второе either обесценивает сдвиг/масштаб аугментации, либо,
+                если нормализовать повторно после неё, отменяет их же).
+                Во всех остальных случаях normalize не передают.
 
     Источник истины — meta.csv, а не скан папок data/raw/: для каждой
     строки пытаемся прочитать соответствующий .npy файл. Битая или
@@ -223,18 +238,12 @@ def load_dataset(data_dir: Path | None = None) -> tuple[np.ndarray, np.ndarray, 
     формы) пропускается с warnings.warn — она не должна ронять загрузку
     всего датасета из-за одного плохого сэмпла.
 
-    НОРМАЛИЗАЦИЯ ПРИМЕНЯЕТСЯ ЗДЕСЬ, ПРИ ЧТЕНИИ. На диске лежат сырые
-    векторы (см. record_sample), normalize_window вызывается к каждому
-    прочитанному сэмплу. Так препроцессинг можно менять, не переписывая
-    сам датасет.
-
     Возвращает (X, y, groups):
-      X      -- (N, WINDOW_LENGTH, FEATURE_VECTOR_SIZE), float32,
-                УЖЕ нормализованные окна
+      X      -- (N, WINDOW_LENGTH, FEATURE_VECTOR_SIZE), float32
       y      -- (N,) строковые метки
       groups -- (N,) строка "{person}__{session}" на сэмпл — нужна для
-                будущего group-based split (чтобы один и тот же человек
-                не попал одновременно в train и val).
+                group-based split (чтобы один и тот же человек не попал
+                одновременно в train и val).
 
     На пустом датасете (meta.csv нет или в нём нет строк) возвращает
     пустые массивы правильной формы, а не исключение.
@@ -272,8 +281,10 @@ def load_dataset(data_dir: Path | None = None) -> tuple[np.ndarray, np.ndarray, 
                     )
                     continue
 
-                # На диске сырые векторы — нормализуем при чтении.
-                features_list.append(normalize_window(sample.astype(np.float32)))
+                sample = sample.astype(np.float32)
+                if normalize:
+                    sample = normalize_window(sample)
+                features_list.append(sample)
                 labels_list.append(row["label"])
                 groups_list.append(f"{row['person']}__{row['session']}")
 

@@ -91,3 +91,42 @@ AUGMENT_SHIFT_RANGE = 0.02
 # Диапазон случайного множителя масштаба (один на всё окно). 0.9..1.1 —
 # рука "то же самое", просто чуть ближе/дальше от камеры.
 AUGMENT_SCALE_RANGE = (0.9, 1.1)
+
+# --- Обучение (см. src/train.py) -------------------------------------------
+
+# Общий сид по умолчанию для RandomForest/numpy/random/keras — воспроизводимость (NFR-4).
+RANDOM_SEED = 42
+
+# Baseline: RandomForestClassifier на расплющенном окне (60*128=7680 признаков).
+RF_N_ESTIMATORS = 200
+
+# GRU: Masking -> GRU -> Dropout -> GRU -> Dense -> Dense(softmax).
+GRU_UNITS_1 = 64
+GRU_UNITS_2 = 32
+GRU_DROPOUT = 0.3
+DENSE_UNITS = 32
+GRU_LEARNING_RATE = 1e-3
+GRU_EPOCHS = 100          # верхний предел; EarlyStopping почти всегда остановит раньше
+GRU_BATCH_SIZE = 16       # маленький датасет на раннем этапе — маленький батч
+GRU_PATIENCE = 10         # EarlyStopping(monitor="val_loss", patience=...)
+
+# Куда сохраняется обученная GRU-модель и снимок списка классов — ВСЕГДА
+# вместе, одной операцией (см. src/train.py: save_model_with_labels_snapshot).
+# .classes.json — это снимок ДЛЯ ПРОВЕРКИ, а не второй редактируемый список
+# (единственный источник истины по классам — data/labels.csv, см. CLAUDE.md).
+GRU_MODEL_PATH = MODELS_DIR / "gesture_gru.keras"
+GRU_CLASSES_SNAPSHOT_PATH = MODELS_DIR / "gesture_gru.classes.json"
+
+# --- Отчёты об обучении (см. src/train.py) ---------------------------------
+
+EXPERIMENTS_CSV_PATH = REPORTS_DIR / "experiments.csv"
+
+# Порядок колонок в experiments.csv — фиксирован по тем же причинам, что
+# и META_CSV_COLUMNS в dataset.py: строка нужна и как заголовок, и как
+# fieldnames для csv.DictWriter при дозаписи.
+EXPERIMENTS_CSV_COLUMNS = [
+    "run_id", "timestamp", "model",
+    "augment_noise", "augment_shift", "augment_scale",
+    "n_train", "n_val", "n_classes", "val_groups",
+    "accuracy", "macro_f1", "per_class_f1",
+]

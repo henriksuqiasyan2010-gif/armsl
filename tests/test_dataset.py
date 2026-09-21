@@ -140,6 +140,24 @@ def test_npy_on_disk_is_raw_normalization_happens_on_read(isolated_data_dir):
     assert not np.allclose(X[0], on_disk)
 
 
+def test_load_dataset_normalize_false_returns_raw(isolated_data_dir):
+    """load_dataset(normalize=False) отдаёт то же, что лежит на диске,
+    без вызова normalize_window. Нужно train.py — augment() применяется
+    к сырому окну, до нормализации."""
+    window = _valid_window()
+    record_sample(KNOWN_LABEL, window, person="p1", session="s1")
+
+    raw_expected = np.stack(
+        [frame_to_vector(frame_hands) for frame_hands in window]
+    ).astype(np.float32)
+
+    X_raw, y, groups = load_dataset(normalize=False)
+
+    assert np.allclose(X_raw[0], raw_expected)
+    assert list(y) == [KNOWN_LABEL]
+    assert list(groups) == ["p1__s1"]
+
+
 def test_record_sample_appends_without_overwriting(isolated_data_dir):
     """Два сэмпла подряд для одного person+session не должны затирать друг друга."""
     record_sample(KNOWN_LABEL, _valid_window(), person="p1", session="s1")

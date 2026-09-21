@@ -136,8 +136,9 @@ dataset.py
   def record_sample(label, window, person, session, *,
                     lighting="", background="",
                     distance_m=None, notes="") -> None       # реализовано
-  def load_dataset(data_dir=None) -> tuple[np.ndarray, np.ndarray, np.ndarray]
-                                                             # реализовано; X, y, groups
+  def load_dataset(data_dir=None, *, normalize=True) -> tuple[np.ndarray, np.ndarray, np.ndarray]
+      # реализовано; X, y, groups. normalize=False -> сырые окна (нужно
+      # train.py: augment() применяется до нормализации, см. её докстринг).
   def split_by_group(X, y, groups, val_groups) -> tuple
       # реализовано; -> (X_train, y_train, X_val, y_val), без groups на
       # выходе. ValueError, если датасет пуст, или после разбиения train
@@ -151,6 +152,44 @@ dataset.py
       # на всё окно (не по кадрам — иначе портится траектория/дрожит рука).
       # Не трогает флаги видимости и координаты отсутствующей руки (флаг=0).
       # seed=None -> недетерминированно, seed=int -> воспроизводимо (NFR-4).
+
+train.py
+  # реализовано (baseline RandomForest + GRU). TensorFlow импортируется
+  # лениво (внутри функций GRU) — baseline и весь конвейер данных работают
+  # без TF, GRU-тесты помечены pytest.importorskip("tensorflow").
+  def get_class_list(labels_csv_path=None) -> list[str]
+      # ПОЛНЫЙ список классов из data/labels.csv, а не только те, что
+      # встретились в данных — индекс должен совпадать с индексом softmax.
+  def prepare_train_val(val_groups, *, data_dir=None) -> DataSplit
+      # load_dataset(normalize=False) + split_by_group; дополнительно
+      # возвращает groups_train/groups_val — непересечение групп проверяется
+      # и здесь, внутри train.py, не только в тестах на split_by_group.
+  def augment_and_normalize_train(X_train_raw, y_train, *, seed,
+                                  add_noise, add_shift, add_scale) -> tuple
+      # ЕДИНСТВЕННОЕ место во всём train.py, где вызывается augment().
+      # В сигнатуре нет X_val/y_val — аугментировать val нечем физически.
+  def normalize_val(X_val_raw) -> np.ndarray
+      # только нормализация, без флагов аугментации в сигнатуре — второй
+      # барьер против случайной аугментации val.
+  def train_baseline(X_train, y_train_idx, *, seed)
+  def train_gru(X_train, y_train_idx, X_val, y_val_idx, *, num_classes,
+               seed, epochs=None) -> tuple[model, history]
+      # Masking(mask_value=0.0) -> GRU -> Dropout -> GRU -> Dense ->
+      # Dense(softmax, ПОЛНЫЙ num_classes). EarlyStopping(monitor="val_loss").
+  def save_model_with_labels_snapshot(save_fn, class_list,
+                                      model_path, snapshot_path) -> None
+      # Модель + models/gesture_gru.classes.json (снимок ДЛЯ ПРОВЕРКИ,
+      # не второй редактируемый список) сохраняются вместе: при сбое
+      # удаляются ОБА файла — либо всё, либо ничего.
+  def run_experiment(*, model_type, val_groups, seed=RANDOM_SEED,
+                     augment_noise=True, augment_shift=True, augment_scale=True,
+                     epochs=None, data_dir=None, reports_dir=None, models_dir=None) -> dict
+      # Полный конвейер одного запуска, пишет строку в reports/experiments.csv
+      # (дозапись, не перезапись) и confusion_matrix.png (+ training_curves.png
+      # для GRU) с именами <run_id>_*.png — фиксированные имена затирали бы
+      # результат предыдущего запуска.
+  # CLI: python -m src.train --model {baseline,gru} --val-groups ... [--seed]
+  #      [--epochs] [--no-augment-noise] [--no-augment-shift] [--no-augment-scale]
 
 predictor.py
   class RealtimePredictor:
