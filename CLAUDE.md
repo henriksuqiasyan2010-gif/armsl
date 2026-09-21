@@ -192,9 +192,37 @@ train.py
   #      [--epochs] [--no-augment-noise] [--no-augment-shift] [--no-augment-scale]
 
 predictor.py
+  # реализовано. TensorFlow импортируется лениво (только при загрузке
+  # модели с диска), поэтому тесты предиктора обходятся без TF.
   class RealtimePredictor:
+      def __init__(model=None, *, model_path=None, snapshot_path=None,
+                   labels_csv_path=None, time_source=time.monotonic)
+          # model/time_source инжектируются ради тестируемости: фейковая
+          # модель и управляемые часы вместо сна на кулдаун. Сверка снимка
+          # классов с labels.csv выполняется ВСЕГДА, в том числе с
+          # подсунутой моделью — рассинхрон обязан падать, а не работать.
       def push(vector: np.ndarray) -> None
+          # вектор ОДНОГО кадра, СЫРОЙ (frame_to_vector без normalize_window).
+          # Иначе и нельзя: normalize_window считает origin/scale медианой
+          # по всему окну, у одного кадра их не существует. Нормализация
+          # применяется внутри, к готовому окну из WINDOW_LENGTH кадров.
       def result() -> tuple[str | None, float, list[tuple[str, float]]]
+          # НЕ ИДЕМПОТЕНТНА: слово отдаётся ровно один раз, повторный вызов
+          # без нового push() вернёт None даже для того же кадра.
+          # top-K отдаётся всегда, в том числе во время кулдауна.
+  def verify_classes_snapshot(snapshot, current_classes) -> None
+      # sha256 снимка + совпадение с labels.csv по составу И порядку.
+  def _vote(history) -> tuple[str, float] | None
+      # единственное место, где рождается засчитанное слово; чистая функция.
+
+predictor.py — структурные гарантии сглаживания (по образцу train.py):
+  - окно голосования задано deque(maxlen=SMOOTHING_WINDOW), а не арифметикой;
+  - слово может родить только _vote(), других путей в коде нет;
+  - неуверенные предсказания кладутся как (None, conf): занимают слот,
+    но голосовать не могут — None не кандидат;
+  - неполная история не даёт слова (проверка внутри _vote, не у вызывающего);
+  - инвариант 1 <= SMOOTHING_MIN_VOTES <= SMOOTHING_WINDOW проверяется при
+    инициализации: опечатка "7 из 5" падает сразу.
 
 Не меняй эти сигнатуры без явного запроса — на них завязаны другие модули.
 
