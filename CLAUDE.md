@@ -139,11 +139,18 @@ dataset.py
   def load_dataset(data_dir=None) -> tuple[np.ndarray, np.ndarray, np.ndarray]
                                                              # реализовано; X, y, groups
   def split_by_group(X, y, groups, val_groups) -> tuple
-      # КОНТРАКТ ЗАФИКСИРОВАН, РЕАЛИЗАЦИЯ ОТЛОЖЕНА
-  def augment(window, seed) -> np.ndarray
-      # КОНТРАКТ ЗАФИКСИРОВАН, РЕАЛИЗАЦИЯ ОТЛОЖЕНА
-  # split_by_group и augment — следующий слой поверх (X, y, groups) от
-  # load_dataset(). Делать их осмысленно, когда появятся реальные записи.
+      # реализовано; -> (X_train, y_train, X_val, y_val), без groups на
+      # выходе. ValueError, если датасет пуст, или после разбиения train
+      # или val пустой (типично — опечатка в val_groups при малом числе
+      # сессий), с явным указанием, что произошло и какие группы есть.
+  def augment(window: np.ndarray, seed: int | None, *,
+              add_noise=True, add_shift=True, add_scale=True) -> np.ndarray
+      # реализовано. Применяется к СЫРОМУ окну (до normalize_window).
+      # Три независимых преобразования с отдельными флагами: гауссов шум
+      # на координатах, один сдвиг на всё окно, один множитель масштаба
+      # на всё окно (не по кадрам — иначе портится траектория/дрожит рука).
+      # Не трогает флаги видимости и координаты отсутствующей руки (флаг=0).
+      # seed=None -> недетерминированно, seed=int -> воспроизводимо (NFR-4).
 
 predictor.py
   class RealtimePredictor:

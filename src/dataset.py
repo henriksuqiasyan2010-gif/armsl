@@ -1,9 +1,8 @@
 """Загрузка датасета из data/, сборка выборок и разбиение на train/val/test.
 
-Этот файл отвечает только за запись и чтение сэмплов (record_sample,
-load_dataset) и справочник меток (load_labels). Разбиение по группам
-person+session (split_by_group) и аугментация (augment) — следующий слой
-поверх (X, y, groups), сюда пока не входят.
+Этот файл отвечает за запись и чтение сэмплов (record_sample, load_dataset),
+справочник меток (load_labels), разбиение по группам person+session
+(split_by_group) и аугментацию сырых окон (augment).
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ import csv
 import warnings
 from datetime import date
 from pathlib import Path
-from typing import Sequence
+from typing import Iterable, Sequence
 
 import numpy as np
 
@@ -286,3 +285,148 @@ def load_dataset(data_dir: Path | None = None) -> tuple[np.ndarray, np.ndarray, 
     y = np.array(labels_list, dtype=str)
     groups = np.array(groups_list, dtype=str)
     return X, y, groups
+
+
+def split_by_group(
+    X: np.ndarray,
+    y: np.ndarray,
+    groups: np.ndarray,
+    val_groups: Iterable[str],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Разбить (X, y) на train/val по группам person__session, а не по сэмплам.
+
+    val_groups -- набор групп (строки "{person}__{session}", как их отдаёт
+                  load_dataset), которые целиком уходят в val. Все остальные
+                  группы, встретившиеся в groups, целиком уходят в train.
+                  Один и тот же человек+сессия не может оказаться сразу
+                  в обеих частях — это и есть смысл разбиения по группам
+                  (см. CLAUDE.md, "Разбиение данных — критично для честности
+                  результатов").
+
+    Возвращает (X_train, y_train, X_val, y_val) -- без groups на выходе:
+    группы уже сделали свою работу при разбиении, дальше в обучении они
+    не участвуют.
+
+    Бросает ValueError, если данных нет вообще, или если после разбиения
+    train или val оказался пустым -- пустой сплит почти всегда означает,
+    что val_groups указан ошибочно (опечатка в person/session, или val_groups
+    случайно покрывает все имеющиеся группы), а не что так и было задумано.
+    Текст ошибки прямо называет, что произошло, и какие группы есть на
+    самом деле -- это особенно важно на раннем этапе, когда сессий мало
+    (2-3 человека) и легко случайно обнулить одну из сторон.
+    """
+    if X.shape[0] == 0:
+        raise ValueError(
+            "Датасет пуст (0 сэмплов) — разбивать нечего. "
+            "Сначала запиши хотя бы несколько сэмплов через record_session.py."
+        )
+
+    val_groups_set = set(val_groups)
+    existing_groups = sorted(set(groups.tolist()))
+    is_val = np.isin(groups, list(val_groups_set))
+
+    X_train, y_train = X[~is_val], y[~is_val]
+    X_val, y_val = X[is_val], y[is_val]
+
+    if X_train.shape[0] == 0:
+        raise ValueError(
+            f"train пуст: val_groups={sorted(val_groups_set)} покрывает "
+            f"все имеющиеся группы ({existing_groups}). Оставь хотя бы одну "
+            "группу вне val_groups, иначе обучать модель не на чём."
+        )
+    if X_val.shape[0] == 0:
+        raise ValueError(
+            f"val пуст: ни один сэмпл не принадлежит группам "
+            f"val_groups={sorted(val_groups_set)}. Реально существующие "
+            f"группы в данных: {existing_groups}. Проверь опечатку в имени "
+            "person/session — или val_groups пуст."
+        )
+
+    return X_train, y_train, X_val, y_val
+
+
+def augment(
+    window: np.ndarray,
+    seed: int | None = None,
+    *,
+    add_noise: bool = True,
+    add_shift: bool = True,
+    add_scale: bool = True,
+) -> np.ndarray:
+    """Аугментировать одно СЫРОЕ окно (60, 128) — до normalize_window.
+
+    window -- сырой вектор, как он лежит на диске (результат frame_to_vector,
+              БЕЗ normalize_window). Аугментация до нормализации, а не после,
+              потому что на диске хранится именно сырое (см. record_sample) —
+              так порядок применения "аугментация -> normalize_window" при
+              обучении совпадает с порядком "запись -> normalize_window при
+              чтении" для настоящих, не аугментированных сэмплов.
+    seed   -- None -> каждый вызов даёт свой, недетерминированный результат
+              (обычная аугментация при обучении). Любое конкретное число ->
+              результат воспроизводим (NFR-4): одинаковый seed = одинаковый
+              выход, что нужно для тестов и для отладки.
+    add_noise, add_shift, add_scale -- три независимых, управляемых флагами
+              преобразования, а не одно жёстко зашитое:
+              - шум:    небольшой гауссов шум на координатах (x,y,z) —
+                        имитирует дрожание детекции от кадра к кадру.
+              - сдвиг:  ОДИН случайный сдвиг на всё окно (не по кадрам
+                        отдельно) — имитирует другое положение человека
+                        в кадре. По кадрам отдельно нельзя: это разрушило
+                        бы траекторию движения (та же причина, по которой
+                        normalize_window считает origin один раз на окно,
+                        см. CLAUDE.md).
+              - масштаб: ОДИН случайный множитель на всё окно — имитирует
+                        другое расстояние до камеры. Тоже один на всё окно,
+                        не по кадрам: иначе рука визуально "дышала" бы.
+
+    Флаги видимости (последние 2 числа каждого кадра) НЕ аугментируются —
+    это не координаты, а метаданные "нашлась ли рука", их менять нельзя.
+    По той же причине ни шум, ни сдвиг не применяются к КООРДИНАТАМ
+    отсутствующей руки: у неё все 63 числа — точный ноль по контракту, и
+    добавление шума/сдвига превратило бы этот ноль в мусорные ненулевые
+    числа, которые normalize_window при чтении принял бы за настоящую руку.
+    Масштаб для отсутствующей руки безопасен и без этой защиты (0 * scale
+    остаётся 0), но маскируем всё одинаково — так правило одно и то же для
+    всех трёх преобразований, а не "только для аддитивных".
+
+    Возвращает массив той же формы (60, 128), что и на входе.
+    """
+    window = np.asarray(window, dtype=np.float32)
+    result = window.copy()
+    rng = np.random.default_rng(seed)
+
+    num_frames = window.shape[0]
+    left = result[:, : config.HAND_VECTOR_SIZE].reshape(num_frames, config.NUM_LANDMARKS, 3)
+    right = result[:, config.HAND_VECTOR_SIZE : 2 * config.HAND_VECTOR_SIZE].reshape(
+        num_frames, config.NUM_LANDMARKS, 3
+    )
+    # Присутствие руки решает флаг видимости, а не то, похожа ли координата
+    # на ноль (тот же принцип, что и в normalize_window).
+    left_present = window[:, -2] > 0.5
+    right_present = window[:, -1] > 0.5
+
+    if add_shift:
+        shift = rng.uniform(-config.AUGMENT_SHIFT_RANGE, config.AUGMENT_SHIFT_RANGE, size=3)
+        shift = shift.astype(np.float32)
+        left[left_present] += shift
+        right[right_present] += shift
+
+    if add_scale:
+        scale = rng.uniform(*config.AUGMENT_SCALE_RANGE)
+        left[left_present] *= scale
+        right[right_present] *= scale
+
+    if add_noise:
+        noise_left = rng.normal(0.0, config.AUGMENT_NOISE_STD, size=left.shape).astype(np.float32)
+        noise_right = rng.normal(0.0, config.AUGMENT_NOISE_STD, size=right.shape).astype(np.float32)
+        left[left_present] += noise_left[left_present]
+        right[right_present] += noise_right[right_present]
+
+    result[:, : config.HAND_VECTOR_SIZE] = left.reshape(num_frames, config.HAND_VECTOR_SIZE)
+    result[:, config.HAND_VECTOR_SIZE : 2 * config.HAND_VECTOR_SIZE] = right.reshape(
+        num_frames, config.HAND_VECTOR_SIZE
+    )
+    # Флаги видимости (последние 2 числа) не трогаем — result уже содержит
+    # их как есть, скопированные из window при result = window.copy().
+
+    return result

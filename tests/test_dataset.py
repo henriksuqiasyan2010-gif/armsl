@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from src import config
-from src.dataset import load_dataset, load_labels, record_sample
+from src.dataset import augment, load_dataset, load_labels, record_sample, split_by_group
 from src.features import frame_to_vector, normalize_window
 from src.landmarks import HandResult
 
@@ -55,6 +55,14 @@ def _valid_window(num_frames: int = config.WINDOW_LENGTH) -> list:
 def _empty_window(num_frames: int = config.WINDOW_LENGTH) -> list:
     """Окно, где ни на одном кадре не найдено ни одной руки."""
     return [[] for _ in range(num_frames)]
+
+
+def _raw_window_right_hand_only(num_frames: int = config.WINDOW_LENGTH) -> np.ndarray:
+    """Сырое окно (T,128): правая рука есть на всех кадрах, левой нет ни на одном
+    (нули + флаг 0) — для проверки, что augment не трогает отсутствующую руку."""
+    return np.stack([frame_to_vector(frame_hands) for frame_hands in _valid_window(num_frames)]).astype(
+        np.float32
+    )
 
 
 # --- load_labels -------------------------------------------------------------
@@ -213,3 +221,101 @@ def test_groups_distinguish_sessions_but_not_duplicate_recordings(isolated_data_
 
     assert list(groups) == ["p1__s1", "p1__s1", "p1__s2"]
     assert len(set(groups)) == 2
+
+
+# --- split_by_group -----------------------------------------------------------
+
+
+def _synthetic_dataset():
+    """Небольшой синтетический (X, y, groups) без обращения к диску:
+    3 группы, по одному сэмплу на группу, X кодирует номер сэмпла,
+    чтобы легко проверить, какие строки куда попали."""
+    X = np.arange(3, dtype=np.float32).reshape(3, 1, 1) * np.ones(
+        (3, config.WINDOW_LENGTH, config.FEATURE_VECTOR_SIZE), dtype=np.float32
+    )
+    y = np.array(["barev", "jur", "barev"], dtype=str)
+    groups = np.array(["p1__s1", "p1__s2", "p2__s1"], dtype=str)
+    return X, y, groups
+
+
+def test_split_by_group_splits_exactly_by_group_membership():
+    X, y, groups = _synthetic_dataset()
+    val_groups = {"p1__s2"}
+
+    X_train, y_train, X_val, y_val = split_by_group(X, y, groups, val_groups)
+
+    is_val = np.isin(groups, list(val_groups))
+    assert np.array_equal(X_train, X[~is_val])
+    assert np.array_equal(y_train, y[~is_val])
+    assert np.array_equal(X_val, X[is_val])
+    assert np.array_equal(y_val, y[is_val])
+    # Ничего не потеряно и не задвоено.
+    assert X_train.shape[0] + X_val.shape[0] == X.shape[0]
+
+
+def test_split_by_group_empty_dataset_raises():
+    X = np.zeros((0, config.WINDOW_LENGTH, config.FEATURE_VECTOR_SIZE), dtype=np.float32)
+    y = np.array([], dtype=str)
+    groups = np.array([], dtype=str)
+
+    with pytest.raises(ValueError, match="пуст"):
+        split_by_group(X, y, groups, val_groups={"p1__s1"})
+
+
+def test_split_by_group_train_empty_when_val_groups_covers_everything():
+    X, y, groups = _synthetic_dataset()
+
+    with pytest.raises(ValueError, match="train пуст"):
+        split_by_group(X, y, groups, val_groups=set(groups.tolist()))
+
+
+def test_split_by_group_val_empty_when_val_groups_unknown():
+    X, y, groups = _synthetic_dataset()
+
+    with pytest.raises(ValueError, match="val пуст"):
+        split_by_group(X, y, groups, val_groups={"typo_person__typo_session"})
+
+
+# --- augment --------------------------------------------------------------------
+
+
+def test_augment_preserves_shape():
+    window = _raw_window_right_hand_only()
+    augmented = augment(window, seed=0)
+    assert augmented.shape == window.shape
+
+
+def test_augment_does_not_touch_visibility_flags():
+    window = _raw_window_right_hand_only()
+    augmented = augment(window, seed=0)
+    assert np.array_equal(augmented[:, -2:], window[:, -2:])
+
+
+def test_augment_does_not_touch_absent_hand():
+    """Левой руки в этом окне нет ни на одном кадре (нули + флаг 0) —
+    после аугментации она должна остаться точным нулём, а не "зашумиться"."""
+    window = _raw_window_right_hand_only()
+    augmented = augment(window, seed=0)
+
+    left_slice = slice(0, config.HAND_VECTOR_SIZE)
+    assert np.array_equal(augmented[:, left_slice], window[:, left_slice])
+    assert np.all(augmented[:, left_slice] == 0.0)
+
+    # А присутствующая (правая) рука реально поменялась — иначе тест
+    # ничего бы не проверял.
+    right_slice = slice(config.HAND_VECTOR_SIZE, 2 * config.HAND_VECTOR_SIZE)
+    assert not np.array_equal(augmented[:, right_slice], window[:, right_slice])
+
+
+def test_augment_seed_none_gives_different_results():
+    window = _raw_window_right_hand_only()
+    result_a = augment(window, seed=None)
+    result_b = augment(window, seed=None)
+    assert not np.array_equal(result_a, result_b)
+
+
+def test_augment_same_seed_gives_same_result():
+    window = _raw_window_right_hand_only()
+    result_a = augment(window, seed=123)
+    result_b = augment(window, seed=123)
+    assert np.array_equal(result_a, result_b)
