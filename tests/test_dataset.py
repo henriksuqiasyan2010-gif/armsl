@@ -66,6 +66,26 @@ def test_load_labels_reads_known_label(isolated_data_dir):
     assert labels[KNOWN_LABEL]["meaning"] == "привет"
 
 
+def test_load_labels_preserves_row_order(isolated_data_dir):
+    """Порядок строк labels.csv = порядок классов = индекс выхода softmax."""
+    labels = load_labels()
+    assert list(labels) == [KNOWN_LABEL, "jur"]
+
+
+def test_load_labels_rejects_duplicate_label_id(isolated_data_dir):
+    """Дубликат label_id сдвинул бы индексы классов — должен быть ValueError."""
+    config.LABELS_CSV_PATH.write_text(
+        "label_id,armenian,pronunciation,meaning\n"
+        f"{KNOWN_LABEL},Բարև,barev,привет\n"
+        "jur,Ջուր,jur,вода\n"
+        f"{KNOWN_LABEL},Բարև,barev,привет ещё раз\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        load_labels()
+
+
 # --- record_sample + load_dataset: round-trip -------------------------------
 
 
@@ -83,6 +103,33 @@ def test_record_and_load_round_trip(isolated_data_dir):
         np.stack([frame_to_vector(frame_hands) for frame_hands in window]).astype(np.float32)
     )
     assert np.allclose(X[0], expected)
+
+
+def test_npy_on_disk_is_raw_normalization_happens_on_read(isolated_data_dir):
+    """На диск сохраняется СЫРОЙ вектор (frame_to_vector), а normalize_window
+    применяется только при чтении в load_dataset.
+
+    Если бы нормализация случайно уехала обратно в record_sample, файл на
+    диске совпал бы с нормализованным — этот тест это поймает.
+    """
+    window = _valid_window()
+    record_sample(KNOWN_LABEL, window, person="p1", session="s1")
+
+    raw_expected = np.stack(
+        [frame_to_vector(frame_hands) for frame_hands in window]
+    ).astype(np.float32)
+    normalized_expected = normalize_window(raw_expected)
+
+    on_disk = np.load(config.RAW_DATA_DIR / KNOWN_LABEL / "p1_s1_0.npy")
+
+    # На диске — сырое, и это не то же самое, что нормализованное.
+    assert np.allclose(on_disk, raw_expected)
+    assert not np.allclose(on_disk, normalized_expected)
+
+    # А load_dataset отдаёт уже нормализованное.
+    X, _, _ = load_dataset()
+    assert np.allclose(X[0], normalized_expected)
+    assert not np.allclose(X[0], on_disk)
 
 
 def test_record_sample_appends_without_overwriting(isolated_data_dir):

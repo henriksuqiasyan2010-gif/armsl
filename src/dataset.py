@@ -32,6 +32,17 @@ def load_labels(labels_csv_path: Path | None = None) -> dict[str, dict]:
     "meaning": ...}. label_id — ASCII-транслитерация, именно она используется
     в коде и путях к файлам (data/raw/<label_id>/...); остальные поля —
     только справочные, для человека.
+
+    ПОРЯДОК ВАЖЕН: data/labels.csv — единственный источник истины по классам,
+    и порядок строк в нём = порядок классов = индекс выхода softmax модели.
+    Возвращаемый dict сохраняет порядок строк файла (dict в Python помнит
+    порядок вставки), поэтому list(load_labels()) даёт список классов в том
+    самом порядке, в котором их должна выдавать модель.
+
+    Строки можно только дописывать в конец: если переставить или удалить
+    строку, индексы поедут, и обученная модель начнёт показывать не те слова.
+    Дубликат label_id по той же причине — ошибка (ValueError): второй
+    такой же ключ молча затёр бы первый и сдвинул все следующие индексы.
     """
     if labels_csv_path is None:
         labels_csv_path = config.LABELS_CSV_PATH
@@ -45,8 +56,15 @@ def load_labels(labels_csv_path: Path | None = None) -> dict[str, dict]:
 
     labels: dict[str, dict] = {}
     with open(labels_csv_path, encoding="utf-8", newline="") as csv_file:
-        for row in csv.DictReader(csv_file):
-            labels[row["label_id"]] = {
+        for row_number, row in enumerate(csv.DictReader(csv_file), start=2):
+            label_id = row["label_id"]
+            if label_id in labels:
+                raise ValueError(
+                    f"{labels_csv_path}, строка {row_number}: label_id {label_id!r} "
+                    "встречается дважды. Дубликат сдвинул бы индексы классов, "
+                    "и модель показывала бы не те слова."
+                )
+            labels[label_id] = {
                 "armenian": row["armenian"],
                 "pronunciation": row["pronunciation"],
                 "meaning": row["meaning"],
@@ -78,6 +96,19 @@ def record_sample(
                по группам "критично для честности результатов").
     lighting, background, distance_m, notes -- необязательные поля meta.csv,
                для ручной пометки условий записи.
+
+    НА ДИСК СОХРАНЯЮТСЯ СЫРЫЕ ВЕКТОРЫ — результат frame_to_vector без
+    normalize_window. Нормализация применяется позже, при чтении в
+    load_dataset(). Причина: нормализация — это часть препроцессинга, а не
+    самих данных. Если сохранять уже нормализованное:
+    - нельзя сравнить "с нормализацией / без" — сырых чисел уже не осталось;
+    - нельзя поменять сам алгоритм нормализации, не перезаписав весь
+      накопленный датасет заново (а перезаписать его нельзя — жесты
+      переснимать пришлось бы руками);
+    - нельзя честно проверить окно короче WINDOW_LENGTH: у обрезанного
+      окна origin/scale должны считаться по нему самому, а в уже
+      нормализованном файле они посчитаны по полному окну.
+    Сырые данные переживают смену препроцессинга, нормализованные — нет.
 
     ФОРМАТ ХРАНЕНИЯ — один .npy на сэмпл + общий data/meta.csv (см. контракт
     данных в CLAUDE.md; это не выбор этой функции, а уже принятое решение
@@ -126,14 +157,13 @@ def record_sample(
             "(человек не попал в кадр?). Сэмпл не сохранён."
         )
 
-    features = normalize_window(raw)
-
     label_dir = config.RAW_DATA_DIR / label
     label_dir.mkdir(parents=True, exist_ok=True)
 
     idx = _next_sample_index(label_dir, person, session)
     file_path = label_dir / f"{person}_{session}_{idx}.npy"
-    np.save(file_path, features)
+    # Сохраняем именно raw, без normalize_window — см. объяснение в докстринге.
+    np.save(file_path, raw)
 
     _append_meta_row(
         {
@@ -194,8 +224,14 @@ def load_dataset(data_dir: Path | None = None) -> tuple[np.ndarray, np.ndarray, 
     формы) пропускается с warnings.warn — она не должна ронять загрузку
     всего датасета из-за одного плохого сэмпла.
 
+    НОРМАЛИЗАЦИЯ ПРИМЕНЯЕТСЯ ЗДЕСЬ, ПРИ ЧТЕНИИ. На диске лежат сырые
+    векторы (см. record_sample), normalize_window вызывается к каждому
+    прочитанному сэмплу. Так препроцессинг можно менять, не переписывая
+    сам датасет.
+
     Возвращает (X, y, groups):
-      X      -- (N, WINDOW_LENGTH, FEATURE_VECTOR_SIZE), float32
+      X      -- (N, WINDOW_LENGTH, FEATURE_VECTOR_SIZE), float32,
+                УЖЕ нормализованные окна
       y      -- (N,) строковые метки
       groups -- (N,) строка "{person}__{session}" на сэмпл — нужна для
                 будущего group-based split (чтобы один и тот же человек
@@ -237,7 +273,8 @@ def load_dataset(data_dir: Path | None = None) -> tuple[np.ndarray, np.ndarray, 
                     )
                     continue
 
-                features_list.append(sample.astype(np.float32))
+                # На диске сырые векторы — нормализуем при чтении.
+                features_list.append(normalize_window(sample.astype(np.float32)))
                 labels_list.append(row["label"])
                 groups_list.append(f"{row['person']}__{row['session']}")
 
