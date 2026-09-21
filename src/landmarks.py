@@ -2,7 +2,7 @@
 
 Обёртка вокруг HandLandmarker: принимает кадр от OpenCV (BGR), отдаёт
 список найденных рук с координатами 21 точки и меткой Left/Right.
-Используется и при записи датасета (recorder.py), и в реальном времени (app.py).
+Используется и при записи датасета (record_session.py), и в реальном времени (app.py).
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ class HandTracker:
         # OpenCV хранит кадр в порядке каналов BGR, а MediaPipe ждёт RGB.
         # Конвертируем здесь, внутри detect(), а не у вызывающего кода —
         # тогда «кадр от камеры» остаётся единственным форматом, который знают
-        # recorder.py, app.py и демо-скрипты.
+        # record_session.py, app.py и демо-скрипты.
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
